@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>THDX • LayerZero Receive Tester</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, Arial;
+      background: #0b1220;
+      color: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #121a2a;
+      border: 1px solid #22304a;
+      border-radius: 12px;
+      padding: 25px;
+      width: min(420px, 90vw);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    h1 {
+      text-align: center;
+      color: #7c5cff;
+    }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #22304a;
+      background: #0f1625;
+      color: #fff;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      margin-top: 10px;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      background: linear-gradient(90deg, #22c55e, #16a34a);
+      color: #fff;
+    }
+    pre {
+      background: #0f1625;
+      border: 1px solid #22304a;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 12px;
+      margin-top: 15px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🌐 THDX LayerZero Receiver</h1>
+    <button id="connect">🔌 Connect Wallet</button>
+    <input id="contract" placeholder="OApp Contract Address" />
+    <input id="srcEid" placeholder="Source Endpoint ID (e.g., 11155111)" />
+    <input id="sender32" placeholder="From Address (bytes32)" />
+    <textarea id="payload" placeholder="Payload (bytes hex)" rows="3"></textarea>
+    <input id="executor" placeholder="Executor Address (optional)" />
+    <textarea id="options" placeholder="Extra Options (hex)" rows="2"></textarea>
+    <button id="send">🚀 Run lzReceive()</button>
+    <pre id="log">log siap...</pre>
+  </div>
+
+  <script>
+    let provider, signer;
+    const log = (msg) => {
+      const el = document.getElementById("log");
+      el.textContent += "\\n" + msg;
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    async function connect() {
+      const btn = document.getElementById("connect");
+      try {
+        if (!window.ethereum) throw new Error("❌ Harap buka di browser wallet.");
+        provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        const me = await signer.getAddress();
+        const net = await provider.getNetwork();
+        btn.textContent = "✅ Connected";
+        log(`✅ Connected: ${me}\\nChain: ${net.chainId}`);
+      } catch (e) {
+        log("❌ Connect error: " + e.message);
+        btn.textContent = "🔌 Connect Wallet";
+      }
+    }
+
+    async function sendLZ() {
+      try {
+        const oapp = document.getElementById("contract").value.trim();
+        const srcEid = parseInt(document.getElementById("srcEid").value);
+        const sender32 = document.getElementById("sender32").value.trim();
+        const payload = document.getElementById("payload").value.trim();
+        const executor = document.getElementById("executor").value.trim() || ethers.constants.AddressZero;
+        const options = document.getElementById("options").value.trim() || "0x";
+
+        const LZ_ABI = [
+          "function lzReceive(uint32,bytes32,bytes,address,bytes) external payable"
+        ];
+
+        const contract = new ethers.Contract(oapp, LZ_ABI, signer);
+        log("🚀 Memanggil lzReceive()...");
+        const tx = await contract.lzReceive(srcEid, sender32, payload, executor, options);
+        log(`⏳ TX dikirim: ${tx.hash}`);
+        const rcpt = await tx.wait();
+        log(`✅ Selesai! Block: ${rcpt.blockNumber}`);
+      } catch (e) {
+        log("❌ Error: " + (e.message || e));
+      }
+    }
+
+    document.getElementById("connect").onclick = connect;
+    document.getElementById("send").onclick = sendLZ;
+  </script>
+</body>
+</html>
