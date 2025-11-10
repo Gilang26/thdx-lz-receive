@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>THDX • LZ Receiver v1.4.1 (Auto TX Mode)</title>
+  <title>THDX • LZ Receiver v1.4.2 (Auto Source EID + Payload)</title>
 
-  <!-- Load ethers.js dengan loader + fallback -->
   <script>
     (function loadEthers(){
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js";
-      s.onload = () => console.log("✅ ethers.js loaded");
-      s.onerror = () => alert("⚠️ Gagal memuat ethers.js. Coba refresh halaman.");
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js";
+      s.onload=()=>console.log("✅ ethers.js loaded");
+      s.onerror=()=>alert("⚠️ Gagal memuat ethers.js, coba refresh halaman.");
       document.head.appendChild(s);
     })();
   </script>
@@ -28,245 +27,127 @@
     .muted{background:#24324d;color:#9fb0d9}
     pre{background:#0f1625;border:1px solid #22304a;border-radius:10px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:12px;font-size:12.5px}
     small{color:#9fb0d9}
-    label{font-size:12px;color:#9fb0d9;margin-top:8px;display:block}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🌐 THDX • LayerZero Receiver v1.4.1</h1>
-
+    <h1>🌐 THDX • LZ Receiver v1.4.2</h1>
     <div class="row">
       <button id="connect" class="primary">🔌 Connect Wallet</button>
       <button id="switchNet" class="muted">🔁 Switch Network</button>
     </div>
 
-    <input id="contract" placeholder="OApp Contract Address (Stable Testnet)" value="0xcAB8F3ed8528655E0C2fad1C504c6CfEccf50B90" />
-
+    <input id="contract" value="0xcAB8F3ed8528655E0C2fad1C504c6CfEccf50B90" placeholder="OApp Stable Contract" />
     <div class="row">
-      <input id="srcEid" placeholder="Source Endpoint ID" readonly />
-      <input id="executor" placeholder="Executor (auto)" readonly />
+      <input id="srcEid" placeholder="srcEid (auto)" readonly />
+      <input id="executor" placeholder="executor (auto)" readonly />
     </div>
 
-    <label>TX hash (Sepolia) — Auto Fetch Payload</label>
-    <input id="txHash" placeholder="0x... (hash transaksi bridge dari Sepolia)" />
-    <input id="srcAdapter" placeholder="(Opsional) Filter log by adapter di Sepolia, ex: 0xc099cD946d5e..." />
+    <input id="txHash" placeholder="TX hash (Sepolia, optional)" />
+    <textarea id="payload" rows="3" placeholder="Payload hex (auto / manual)"></textarea>
+    <textarea id="options" rows="2" placeholder="Options" readonly>0x</textarea>
 
     <div class="row">
-      <button id="fetch" class="muted">📥 Fetch Payload from TX</button>
-      <button id="parse" class="muted">🔎 Parse Payload</button>
+      <button id="fetch" class="muted">📥 Fetch Payload</button>
+      <button id="auto" class="muted">⚡ Auto Fill Payload</button>
     </div>
-
-    <textarea id="payload" placeholder="Payload hex (auto terisi setelah Fetch)" rows="3"></textarea>
-    <textarea id="options" placeholder="Extra Options" rows="2" readonly>0x</textarea>
 
     <div class="row">
       <button id="send" class="ok">🚀 Run lzReceive()</button>
-      <button id="openTx" class="muted">🔗 Redeem Result</button>
+      <button id="openTx" class="muted">🔗 Open TX</button>
     </div>
 
     <pre id="log">log siap...</pre>
-    <small>Catatan: Auto-fetch mencari payload dari logs TX Sepolia (heuristik). Jika gagal, kamu masih bisa tempel payload manual.</small>
   </div>
 
   <script>
-    async function waitForEthers(){
-      while(typeof window.ethers === "undefined"){ await new Promise(r => setTimeout(r, 150)); }
+  async function waitForEthers(){
+    while(typeof window.ethers==="undefined"){await new Promise(r=>setTimeout(r,150));}
+  }
+
+  document.addEventListener("DOMContentLoaded",async()=>{
+    await waitForEthers();
+    const $=id=>document.getElementById(id);
+    const log=m=>{const el=$("log");el.textContent+=(el.textContent?"\n":"")+m;el.scrollTop=el.scrollHeight;console.log(m);};
+    let provider,signer,me,currentChainId,lastTx;
+
+    const CHAINS={
+      11155111:{name:"Sepolia",lzEid:30101,explorer:"https://sepolia.etherscan.io"},
+      2201:{name:"Stable",lzEid:40374,explorer:"https://blockscout.testnet.stable.xyz"}
+    };
+
+    function autoFill(chain){
+      if(chain===2201){
+        $("srcEid").value="30101"; // Source = Sepolia
+        $("executor").value="0xcAB8F3ed8528655E0C2fad1C504c6CfEccf50B90";
+        $("options").value="0x";
+        log("🌍 Detected Stable Testnet → srcEid=30101 (Sepolia)");
+      }else{
+        $("srcEid").value="40374";
+        $("executor").value="0x0000000000000000000000000000000000000000";
+        log("🌍 Detected Sepolia → dstEid=40374 (Stable)");
+      }
     }
 
-    document.addEventListener("DOMContentLoaded", async () => {
-      await waitForEthers();
+    async function connect(){
+      try{
+        if(!window.ethereum)throw new Error("Wallet tidak tersedia.");
+        provider=new ethers.providers.Web3Provider(window.ethereum,"any");
+        await provider.send("eth_requestAccounts",[]);
+        signer=provider.getSigner();
+        me=await signer.getAddress();
+        const net=await provider.getNetwork();
+        currentChainId=Number(net.chainId);
+        $("connect").textContent="✅ Connected";
+        log(`✅ Connected: ${me}\nChain: ${currentChainId}`);
+        autoFill(currentChainId);
+      }catch(e){log("❌ Connect error: "+(e.message||e));}
+    }
 
-      let provider, signer, currentChainId, me, lastTxHashOut;
+    async function switchNet(){
+      const target=currentChainId===2201?11155111:2201;
+      await window.ethereum.request({method:"wallet_switchEthereumChain",params:[{chainId:ethers.utils.hexValue(target)}]});
+      const net=await provider.getNetwork();
+      currentChainId=Number(net.chainId);
+      autoFill(currentChainId);
+      log(`🔁 Switched to ${CHAINS[currentChainId].name}`);
+    }
 
-      // Mapping jaringan + EID LayerZero sesuai setup kamu
-      const CHAINS = {
-        // Sepolia (source)
-        11155111: {
-          name: "Sepolia",
-          hex: "0xaa36a7",
-          rpc: ["https://rpc.sepolia.org"],
-          explorer: "https://sepolia.etherscan.io",
-          currency: { name:"SepoliaETH", symbol:"ETH", decimals:18 },
-          lzEid: 30101,
-          executor: "0x0000000000000000000000000000000000000000"
-        },
-        // Stable Testnet (dest)
-        2201: {
-          name: "Stable Testnet",
-          hex: "0x899",
-          rpc: ["https://rpc.testnet.stable.xyz"],
-          explorer: "https://blockscout.testnet.stable.xyz",
-          currency: { name:"Stable", symbol:"STBL", decimals:18 },
-          lzEid: 40374,
-          executor: "0xcAB8F3ed8528655E0C2fad1C504c6CfEccf50B90"
-        }
-      };
+    // Auto payload generator (default 10 USDC)
+    async function autoPayload(){
+      if(!me)return log("⚠️ Connect wallet dulu");
+      const addr="0x"+me.slice(2).padStart(64,"0");
+      const amt=ethers.utils.hexZeroPad(ethers.BigNumber.from("10000000").toHexString(),32); // 10 USDC
+      const payload=addr+amt.slice(2);
+      $("payload").value=payload;
+      log("⚡ Auto payload generated (10 USDC): "+payload);
+    }
 
-      const $ = (id) => document.getElementById(id);
-      const log = (m) => { const el=$("log"); el.textContent += (el.textContent? "\n":"") + m; el.scrollTop = el.scrollHeight; console.log(m); };
+    async function runLzReceive(){
+      try{
+        const oapp=$("contract").value.trim();
+        const srcEid=Number($("srcEid").value);
+        const exec=$("executor").value.trim();
+        const payload=$("payload").value.trim();
+        if(!oapp||!payload)return log("⚠️ Lengkapi semua field");
+        const sender="0x"+me.slice(2).padStart(64,"0");
+        const LZ_ABI=["function lzReceive(uint32,bytes32,bytes,address,bytes) external payable"];
+        const c=new ethers.Contract(oapp,LZ_ABI,signer);
+        log(`🚀 Sending lzReceive()...`);
+        const tx=await c.lzReceive(srcEid,sender,payload,exec,"0x");
+        log(`⏳ TX: ${tx.hash}`);
+        const rc=await tx.wait();
+        log(`✅ Success! Block ${rc.blockNumber}`);
+        lastTx=tx.hash;
+      }catch(e){log("❌ Error: "+(e.message||e));}
+    }
 
-      function autoFillFor(chainId){
-        const c = CHAINS[chainId];
-        if(!c) { log("⚠️ Chain tidak dikenali: " + chainId); return; }
-        $("srcEid").value = c.lzEid;
-        $("executor").value = c.executor;
-        $("options").value = "0x";
-        log(`🌍 Detected: ${c.name} | srcEid=${c.lzEid} | executor=${c.executor}`);
-      }
-
-      async function connect(){
-        try{
-          if(!window.ethereum) throw new Error("Buka di browser wallet (MetaMask/OKX/Trust).");
-          provider = new ethers.providers.Web3Provider(window.ethereum, "any");
-          await provider.send("eth_requestAccounts", []);
-          signer = provider.getSigner();
-          me = await signer.getAddress();
-          const net = await provider.getNetwork();
-          currentChainId = Number(net.chainId);
-          $("connect").textContent = "✅ Connected";
-          log(`✅ Connected: ${me}\nChain: ${currentChainId}`);
-          autoFillFor(currentChainId);
-        }catch(e){ log("❌ Connect error: " + (e.message||e)); $("connect").textContent="🔌 Connect Wallet"; }
-      }
-
-      async function switchNetwork(){
-        // Toggle: Stable ↔ Sepolia
-        const target = (currentChainId === 2201) ? CHAINS[11155111] : CHAINS[2201];
-        try{
-          await window.ethereum.request({ method:"wallet_switchEthereumChain", params:[{ chainId: target.hex }] });
-        }catch(switchErr){
-          if (switchErr.code === 4902 || (switchErr.message||"").includes("Unrecognized")){
-            await window.ethereum.request({
-              method:"wallet_addEthereumChain",
-              params:[{ chainId: target.hex, chainName: target.name, rpcUrls: target.rpc, nativeCurrency: target.currency, blockExplorerUrls: [target.explorer] }]
-            });
-          } else { throw switchErr; }
-        }
-        const net = await provider.getNetwork();
-        currentChainId = Number(net.chainId);
-        autoFillFor(currentChainId);
-        log(`🔁 Switched to ${CHAINS[currentChainId]?.name || currentChainId}`);
-      }
-
-      // Parser payload sederhana: [32 byte address padded][32 byte amount]
-      function parsePayloadSimple(hex){
-        try{
-          if(!hex || !hex.startsWith("0x")) throw new Error("Payload harus hex diawali 0x");
-          const clean = hex.slice(2);
-          if(clean.length < 64) throw new Error("Payload terlalu pendek");
-          const word1 = clean.slice(0,64);
-          const addrLast40 = word1.slice(24);
-          const addr = "0x" + addrLast40;
-          if(clean.length < 128) throw new Error("Payload kurang dari 64 byte kedua");
-          const word2 = "0x" + clean.slice(64,128);
-          const amount = ethers.BigNumber.from(word2);
-          return { addr, amount };
-        }catch(err){
-          return { error: err.message || String(err) };
-        }
-      }
-
-      $("parse").onclick = () => {
-        const payload = $("payload").value.trim();
-        const p = parsePayloadSimple(payload);
-        if(p.error) log("🔎 Parse error: " + p.error);
-        else {
-          const amountPretty = ethers.utils.formatUnits(p.amount, 6); // asumsi 6 desimal (USDC/USDT)
-          log(`🔎 Parse OK:\naddr=${p.addr}\namount(raw)=${p.amount.toString()}\namount(6dec)=${amountPretty}`);
-        }
-      };
-
-      // === Auto TX Mode: fetch payload dari tx hash Sepolia ===
-      async function fetchPayloadFromTx(){
-        try{
-          const txh = $("txHash").value.trim();
-          if(!/^0x([0-9a-fA-F]{64})$/.test(txh)) return log("⚠️ TX hash tidak valid.");
-          // gunakan provider sepolia khusus (jangan pakai provider wallet jika sedang di Stable)
-          const sepolia = new ethers.providers.JsonRpcProvider(CHAINS[11155111].rpc[0]);
-          const rcpt = await sepolia.getTransactionReceipt(txh);
-          if(!rcpt) return log("⚠️ Receipt tidak ditemukan. TX belum mined?");
-          log(`📦 Logs found: ${rcpt.logs.length}`);
-
-          const filterAddr = $("srcAdapter").value.trim().toLowerCase();
-          // heuristik cari payload: ambil data terpanjang dari log address adapter (jika diisi) atau semua log
-          let candidate = null;
-          for(const lg of rcpt.logs){
-            if(filterAddr && lg.address.toLowerCase() !== filterAddr) continue;
-            const dataHex = lg.data || "0x";
-            if(/^0x[0-9a-fA-F]+$/.test(dataHex) && dataHex.length >= 2+128){ // minimal 64+64
-              if(!candidate || dataHex.length > candidate.length) candidate = dataHex;
-            }
-          }
-          if(!candidate){
-            // fallback: scan semua log tanpa filter address
-            for(const lg of rcpt.logs){
-              const dataHex = lg.data || "0x";
-              if(/^0x[0-9a-fA-F]+$/.test(dataHex) && dataHex.length >= 2+128){
-                if(!candidate || dataHex.length > candidate.length) candidate = dataHex;
-              }
-            }
-          }
-          if(!candidate) return log("❌ Tidak menemukan payload yang cocok di logs. Isi payload manual.");
-
-          // Beberapa event menggabungkan banyak word; ambil 64*2 pertama (addr+amount) sebagai payload minimal
-          const clean = candidate.slice(2);
-          const minimal = "0x" + clean.slice(0, 128);
-          $("payload").value = minimal;
-          log(`✅ Payload extracted (first 64+64 bytes): ${minimal.slice(0,66)}...`);
-          // auto-parse
-          const p = parsePayloadSimple(minimal);
-          if(!p.error){
-            const amountPretty = ethers.utils.formatUnits(p.amount, 6);
-            log(`🧩 Parsed: to=${p.addr} | amount(6dec)=${amountPretty}`);
-          } else {
-            log("ℹ️ Parser warning: " + p.error);
-          }
-        }catch(e){
-          log("❌ Fetch error: " + (e.message||e));
-        }
-      }
-
-      async function runLzReceive(){
-        try{
-          if(!signer) return log("⚠️ Connect wallet dulu.");
-          const oapp = $("contract").value.trim();
-          const srcEid = Number($("srcEid").value);
-          const executor = $("executor").value.trim() || ethers.constants.AddressZero;
-          const options = $("options").value.trim() || "0x";
-          const payload = $("payload").value.trim();
-
-          if(!oapp || !/^0x[0-9a-fA-F]{40}$/.test(oapp)) return log("⚠️ OApp contract address tidak valid");
-          if(!srcEid || !payload) return log("⚠️ srcEid & payload wajib diisi");
-
-          const sender32 = "0x" + me.slice(2).padStart(64,"0");
-
-          const LZ_ABI = ["function lzReceive(uint32,bytes32,bytes,address,bytes) external payable"];
-          const contract = new ethers.Contract(oapp, LZ_ABI, signer);
-
-          log(`🚀 Memanggil lzReceive() di ${CHAINS[currentChainId]?.name || currentChainId}...`);
-          const tx = await contract.lzReceive(srcEid, sender32, payload, executor, options);
-          log(`⏳ TX dikirim: ${tx.hash}`);
-          lastTxHashOut = tx.hash;
-          const rcpt = await tx.wait();
-          log(`✅ Selesai! Block: ${rcpt.blockNumber}`);
-        }catch(e){
-          log("❌ Error: " + ((e && e.message) || String(e)));
-        }
-      }
-
-      function openRedeem(){
-        if(!lastTxHashOut){ log("ℹ️ Belum ada TX output. Jalankan lzReceive() dulu."); return; }
-        const exp = CHAINS[currentChainId]?.explorer || "";
-        const url = exp ? `${exp}/tx/${lastTxHashOut}` : lastTxHashOut;
-        window.open(url, "_blank");
-      }
-
-      $("connect").onclick = connect;
-      $("switchNet").onclick = switchNetwork;
-      $("fetch").onclick = fetchPayloadFromTx;
-      $("send").onclick = runLzReceive;
-      $("openTx").onclick = openRedeem;
-    });
+    $("connect").onclick=connect;
+    $("switchNet").onclick=switchNet;
+    $("auto").onclick=autoPayload;
+    $("send").onclick=runLzReceive;
+    $("openTx").onclick=()=>{if(!lastTx)return;window.open(`${CHAINS[currentChainId].explorer}/tx/${lastTx}`,"_blank");};
+  });
   </script>
 </body>
 </html>
